@@ -1,19 +1,17 @@
 # HTML5-PHP
 
-This is a **highly experimental** HTML5 Parser.
-
 The need for an HTML5 parser in PHP is clear. This project initially
 began with the seemingly abandoned `html5lib` project [original source](https://code.google.com/p/html5lib/source/checkout).
 But after some initial refactoring work, we began a new parser.
 
-- An HTML5 serializer [feature complete]
-- Support for PHP namespace [done]
-- Composer support [done]
-- Event-based (SAX-like) parser [feature complete]
-- DOM tree builder [feature complete]
+- An HTML5 serializer
+- Support for PHP namespaces
+- Composer support
+- Event-based (SAX-like) parser
+- DOM tree builder
 - Interoperability with QueryPath [[in progress](https://github.com/technosophos/querypath/issues/114)]
 
-[![Build Status](https://travis-ci.org/Masterminds/html5-php.png?branch=master)](https://travis-ci.org/Masterminds/html5-php)
+[![Build Status](https://travis-ci.org/Masterminds/html5-php.png?branch=master)](https://travis-ci.org/Masterminds/html5-php) [![Latest Stable Version](https://poser.pugx.org/masterminds/html5/v/stable.png)](https://packagist.org/packages/masterminds/html5) [![Coverage Status](https://coveralls.io/repos/Masterminds/html5-php/badge.png?branch=master)](https://coveralls.io/r/Masterminds/html5-php?branch=master)
 
 ## Installation
 
@@ -24,12 +22,12 @@ To install, add `masterminds/html5` to your `composer.json` file:
 ```
 {
   "require" : {
-    "masterminds/html5": "dev-master"
+    "masterminds/html5": "1.*"
   },
 }
 ```
 
-(You may substitute `dev-master` for a more stable release tag, of
+(You may substitute `1.*` for a more specific release tag, of
 course.)
 
 From there, use the `composer install` or `composer update` commands to
@@ -61,13 +59,14 @@ $html = <<< 'HERE'
 HERE;
 
 // Parse the document. $dom is a DOMDocument.
-$dom = HTML5::loadHTML($html);
+$html5 = new HTML5();
+$dom = $html5->loadHTML($html);
 
 // Render it as HTML5:
-print HTML5::saveHTML($dom);
+print $html5->saveHTML($dom);
 
 // Or save it to a file:
-HTML5::save($dom, 'out.html');
+$html5->save($dom, 'out.html');
 
 ?>
 ```
@@ -113,13 +112,12 @@ it into a character representation -- an HTML5 document.
 The serializer is broken into three parts:
 
 - The `OutputRules` contain the rules to turn DOM elements into strings. The
-rules used are configurable with the `OutputRules` being the default. An option
-can be set by default or at call time to use a different ruleset that implements
-`RulesInterface`.
+rules are an implementation of the interface `RulesInterface` allowing for
+different rule sets to be used. 
 - The `Traverser`, which is a special-purpose tree walker. It visits
 each node node in the tree and uses the `OutputRules` to transform the node
 into a string.
-- The `Serializer` manages the `Traverser` and stores the resultant data
+- `\HTML5` manages the `Traverser` and stores the resultant data
 in the correct place.
 
 The serializer (`save()`, `saveHTML()`) follows the 
@@ -135,6 +133,9 @@ So tags are serialized according to these rules:
 Please check the issue queue for a full list, but the following are
 issues known issues that are not presently on the roadmap:
 
+- Namespaces: HTML5 only [supports a selected list of namespaces](http://www.w3.org/TR/html5/infrastructure.html#namespaces)
+  and they do not operate in the same way as XML namespaces. A `:` has no special
+  meaning. The parser does not support XML style namespaces via `:`.
 - Scripts: This parser does not contain a JavaScript or a CSS
   interpreter. While one may be supplied, not all features will be
   supported.
@@ -149,6 +150,10 @@ issues known issues that are not presently on the roadmap:
   * Some autocorrection is done automatically.
   * Per the spec, many legacy tags are admitted and correctly handled,
     even though they are technically not part of HTML5.
+- Attribute names and values: Due to the implementation details of the
+  PHP implementation of DOM, attribute names that do not follow the 
+  XML 1.0 standard are not inserted into the DOM. (Effectively, they
+  are ignored.) If you've got a clever fix for this, jump in!
 - Processor Instructions: The HTML5 spec does not allow processor
   instructions. We do. Since this is a server-side library, we think
   this is useful. And that means, dear reader, that in some cases you

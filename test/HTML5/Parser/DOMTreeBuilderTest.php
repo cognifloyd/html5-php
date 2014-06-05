@@ -3,11 +3,13 @@
  * @file
  * Test the Tree Builder.
  */
-namespace HTML5\Parser;
+namespace HTML5\Tests\Parser;
 
 use HTML5\Elements;
-
-require_once __DIR__ . '/../TestCase.php';
+use HTML5\Parser\StringInputStream;
+use HTML5\Parser\Scanner;
+use HTML5\Parser\Tokenizer;
+use HTML5\Parser\DOMTreeBuilder;
 
 /**
  * These tests are functional, not necessarily unit tests.
@@ -108,7 +110,7 @@ class DOMTreeBuilderTest extends \HTML5\Tests\TestCase {
       <svg width='150' viewbox='2'>
       <rect textlength='2'/>
       <animatecolor>foo</animatecolor>
-      </svg> 
+      </svg>
       </body></html>";
     $doc = $this->parse($html);
     $root = $doc->documentElement;
@@ -194,13 +196,21 @@ class DOMTreeBuilderTest extends \HTML5\Tests\TestCase {
     $data = $wrapper->childNodes->item(0);
     $this->assertEquals(XML_TEXT_NODE, $data->nodeType);
     $this->assertEquals('test', $data->data);
+
+    // The DomTreeBuilder has special handling for text when in before head mode.
+    $html = "<!DOCTYPE html><html>
+    Foo<head></head><body></body></html>";
+    $doc = $this->parse($html);
+    $this->assertEquals('Line 0, Col 0: Unexpected text. Ignoring: Foo', $doc->errors[0]);
+    $headElement = $doc->documentElement->firstChild;
+    $this->assertEquals('head', $headElement->tagName);
   }
 
   public function testParseErrors() {
     $html = "<!DOCTYPE html><html><math><![CDATA[test";
     $doc = $this->parse($html);
 
-    // We're JUST testing that we can access errors. Actual testing of 
+    // We're JUST testing that we can access errors. Actual testing of
     // error messages happen in the Tokenizer's tests.
     $this->assertGreaterThan(0,  count($doc->errors));
     $this->assertTrue(is_string($doc->errors[0]));
@@ -264,7 +274,7 @@ class DOMTreeBuilderTest extends \HTML5\Tests\TestCase {
     $this->assertEquals('math', $math->tagName);
     $this->assertEquals('math', $math->nodeName);
     $this->assertEquals('math', $math->localName);
-    $this->assertEmpty($math->namespaceURI);
+    $this->assertEquals('http://www.w3.org/1998/Math/MathML', $math->namespaceURI);
   }
 
   public function testSVG() {
@@ -283,13 +293,60 @@ class DOMTreeBuilderTest extends \HTML5\Tests\TestCase {
       </html>';
 
     $doc = $this->parse($html);
+
     $svg = $doc->getElementsByTagName('svg')->item(0);
+
     $this->assertEquals('svg', $svg->tagName);
     $this->assertEquals('svg', $svg->nodeName);
     $this->assertEquals('svg', $svg->localName);
-    $this->assertEmpty($svg->namespaceURI);
+    $this->assertEquals('http://www.w3.org/2000/svg', $svg->namespaceURI);
 
     $textPath = $doc->getElementsByTagName('textPath')->item(0);
     $this->assertEquals('textPath', $textPath->tagName);
   }
+
+  public function testNoScript() {
+    $html = '<!DOCTYPE html><html><head><noscript>No JS</noscript></head></html>';
+    $doc = $this->parse($html);
+    $this->assertEmpty($doc->errors);
+    $noscript = $doc->getElementsByTagName('noscript')->item(0);
+    $this->assertEquals('noscript', $noscript->tagName);
+  }
+
+  /**
+   * Regression for issue #13
+   */
+  public function testRegressionHTMLNoBody() {
+    $html = '<!DOCTYPE html><html><span id="test">Test</span></html>';
+    $doc = $this->parse($html);
+    $span = $doc->getElementById('test');
+
+    $this->assertEmpty($doc->errors);
+
+    $this->assertEquals('span', $span->tagName);
+    $this->assertEquals('Test', $span->textContent);
+  }
+
+  public function testInstructionProcessor() {
+    $string = '<!DOCTYPE html><html><?foo bar ?></html>';
+
+    $treeBuilder = new DOMTreeBuilder();
+    $is = new InstructionProcessorMock();
+    $treeBuilder->setInstructionProcessor($is);
+
+    $input = new StringInputStream($string);
+    $scanner = new Scanner($input);
+    $parser = new Tokenizer($scanner, $treeBuilder);
+
+    $parser->parse();
+    $dom = $treeBuilder->document();
+    $div = $dom->getElementsByTagName('div')->item(0);
+
+    $this->assertEquals(1, $is->count);
+    $this->assertEquals('foo', $is->name);
+    $this->assertEquals('bar ', $is->data);
+    $this->assertEquals('div', $div->tagName);
+    $this->assertEquals('foo', $div->textContent);
+  }
 }
+

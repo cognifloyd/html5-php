@@ -1,11 +1,9 @@
 <?php
-namespace HTML5\Tests;
+namespace HTML5\Tests\Serializer;
 
 use \HTML5\Serializer\OutputRules;
 use \HTML5\Serializer\Traverser;
 use \HTML5\Parser;
-
-require_once __DIR__ . '/../TestCase.php';
 
 class OutputRulesTest extends \HTML5\Tests\TestCase {
 
@@ -19,10 +17,13 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
         <p>This is a test.</p>
       </body>
     </html>';
-
+  public function setUp()
+  {
+      $this->html5 = $this->getInstance();
+  }
   /**
    * Using reflection we make a protected method accessible for testing.
-   * 
+   *
    * @param string $name
    *   The name of the method on the Traverser class to test.
    *
@@ -44,44 +45,41 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
   }
 
   function getOutputRules($options = array()) {
-    $options = $options + \HTML5::options();
+    $options = $options + $this->html5->getOptions();
     $stream = fopen('php://temp', 'w');
-    $dom = \HTML5::loadHTML($this->markup);
-    $t = new Traverser($dom, $stream, $options);
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $dom = $this->html5->loadHTML($this->markup);
+    $r = new OutputRules($stream, $options);
+    $t = new Traverser($dom, $stream, $r, $options);
 
-    return array($o, $stream);
+    return array($r, $stream);
   }
 
   function testDocument() {
-    $dom = \HTML5::loadHTML('<!doctype html><html lang="en"><body>foo</body></html>');
+    $dom = $this->html5->loadHTML('<!doctype html><html lang="en"><body>foo</body></html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
-    $o->document($dom);
-    $this->assertEquals("<!DOCTYPE html>\n<html lang=\"en\"><body>foo</body></html>\n", stream_get_contents($stream, -1, 0));
+    $r->document($dom);
+    $expected = '<!DOCTYPE html>' . PHP_EOL . '<html lang="en"><body>foo</body></html>' . PHP_EOL;
+    $this->assertEquals($expected, stream_get_contents($stream, -1, 0));
   }
 
   function testDoctype() {
-    $dom = \HTML5::loadHTML('<!doctype html><html lang="en"><body>foo</body></html>');
+    $dom = $this->html5->loadHTML('<!doctype html><html lang="en"><body>foo</body></html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $m = $this->getProtectedMethod('doctype');
-    $m->invoke($o, 'foo');
-    $this->assertEquals("<!DOCTYPE html>\n", stream_get_contents($stream, -1, 0));
+    $m->invoke($r, 'foo');
+    $this->assertEquals("<!DOCTYPE html>" . PHP_EOL, stream_get_contents($stream, -1, 0));
   }
 
-
   function testElement() {
-    $dom = \HTML5::loadHTML('<!doctype html>
+    $dom = $this->html5->loadHTML('<!doctype html>
     <html lang="en">
       <body>
         <div id="foo" class="bar baz">foo bar baz</div>
@@ -94,17 +92,16 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     </html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $list = $dom->getElementsByTagName('div');
-    $o->element($list->item(0));
+    $r->element($list->item(0));
     $this->assertEquals('<div id="foo" class="bar baz">foo bar baz</div>', stream_get_contents($stream, -1, 0));
   }
 
   function testOpenTag() {
-    $dom = \HTML5::loadHTML('<!doctype html>
+    $dom = $this->html5->loadHTML('<!doctype html>
     <html lang="en">
       <body>
         <div id="foo" class="bar baz">foo bar baz</div>
@@ -112,18 +109,17 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     </html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $list = $dom->getElementsByTagName('div');
     $m = $this->getProtectedMethod('openTag');
-    $m->invoke($o, $list->item(0));
+    $m->invoke($r, $list->item(0));
     $this->assertEquals('<div id="foo" class="bar baz">', stream_get_contents($stream, -1, 0));
   }
 
   function testCData() {
-    $dom = \HTML5::loadHTML('<!doctype html>
+    $dom = $this->html5->loadHTML('<!doctype html>
     <html lang="en">
       <body>
         <div><![CDATA[bar]]></div>
@@ -131,17 +127,34 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     </html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $list = $dom->getElementsByTagName('div');
-    $o->cdata($list->item(0)->childNodes->item(0));
+    $r->cdata($list->item(0)->childNodes->item(0));
     $this->assertEquals('<![CDATA[bar]]>', stream_get_contents($stream, -1, 0));
+
+    $dom = $this->html5->loadHTML('<!doctype html>
+    <html lang="en">
+      <body>
+        <div id="foo"></div>
+      </body>
+    </html>');
+
+
+    $dom->getElementById('foo')->appendChild(new \DOMCdataSection("]]>Foo<[![CDATA test ]]>"));
+
+    $stream = fopen('php://temp', 'w');
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
+    $list = $dom->getElementsByTagName('div');
+    $r->cdata($list->item(0)->childNodes->item(0));
+
+    $this->assertEquals('<![CDATA[]]]]><![CDATA[>Foo<[![CDATA test ]]]]><![CDATA[>]]>', stream_get_contents($stream, -1, 0));
   }
 
   function testComment() {
-    $dom = \HTML5::loadHTML('<!doctype html>
+    $dom = $this->html5->loadHTML('<!doctype html>
     <html lang="en">
       <body>
         <div><!-- foo --></div>
@@ -149,17 +162,36 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     </html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $list = $dom->getElementsByTagName('div');
-    $o->comment($list->item(0)->childNodes->item(0));
+    $r->comment($list->item(0)->childNodes->item(0));
     $this->assertEquals('<!-- foo -->', stream_get_contents($stream, -1, 0));
+
+
+    $dom = $this->html5->loadHTML('<!doctype html>
+    <html lang="en">
+      <body>
+        <div id="foo"></div>
+      </body>
+      </html>');
+    $dom->getElementById('foo')->appendChild(new \DOMComment('<!-- --> --> Foo -->'));
+
+    $stream = fopen('php://temp', 'w');
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
+
+    $list = $dom->getElementsByTagName('div');
+    $r->comment($list->item(0)->childNodes->item(0));
+
+    // Could not find more definitive guidelines on what this should be. Went with
+    // what the HTML5 spec says and what \DOMDocument::saveXML() produces.
+    $this->assertEquals('<!--<!-- --> --> Foo -->-->', stream_get_contents($stream, -1, 0));
   }
 
   function testText() {
-    $dom = \HTML5::loadHTML('<!doctype html>
+    $dom = $this->html5->loadHTML('<!doctype html>
     <html lang="en">
       <head>
         <script>baz();</script>
@@ -167,13 +199,26 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     </html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $list = $dom->getElementsByTagName('script');
-    $o->text($list->item(0)->childNodes->item(0));
+    $r->text($list->item(0)->childNodes->item(0));
     $this->assertEquals('baz();', stream_get_contents($stream, -1, 0));
+
+    $dom = $this->html5->loadHTML('<!doctype html>
+    <html lang="en">
+      <head id="foo"></head>
+    </html>');
+    $dom->getElementById('foo')->appendChild(new \DOMText('<script>alert("hi");</script>'));
+
+    $stream = fopen('php://temp', 'w');
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
+
+    $item = $dom->getElementById('foo');
+    $r->text($item->firstChild);
+    $this->assertEquals('&lt;script&gt;alert("hi");&lt;/script&gt;', stream_get_contents($stream, -1, 0));
   }
 
   function testNl() {
@@ -192,28 +237,49 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     $this->assertEquals('foo', stream_get_contents($s, -1, 0));
   }
 
-  function testEnc() {
+  function getEncData(){
+  	return array(
+  	  array(FALSE, '&\'<>"', '&amp;\'&lt;&gt;"', '&amp;&apos;&lt;&gt;&quot;'),
+  	  array(FALSE, 'This + is. a < test', 'This + is. a &lt; test', 'This &plus; is&period; a &lt; test'),
+  	  array(FALSE, '.+#', '.+#', '&period;&plus;&num;'),
 
-    // Test basic escaping of text.
-    $tests = array(
-      '&\'<>"' => '&amp;&#039;&lt;&gt;&quot;',
-      'This + is. a < test' => 'This + is. a &lt; test',
+  	  array(TRUE, '.+#\'', '.+#\'', '&period;&plus;&num;&apos;'),
+  	  array(TRUE, '&".<', '&amp;&quot;.<', '&amp;&quot;&period;&lt;'),
+  	  array(TRUE, '&\'<>"', '&amp;\'<>&quot;', '&amp;&apos;&lt;&gt;&quot;'),
+  	  array(TRUE, "\xc2\xa0\"'", '&nbsp;&quot;\'', '&nbsp;&quot;&apos;'),
     );
+  }
+
+  /**
+   * Test basic encoding of text.
+   * @dataProvider getEncData
+   */
+  function testEnc($isAttribute, $test, $expected, $expectedEncoded) {
 
     list($o, $s) = $this->getOutputRules();
     $m = $this->getProtectedMethod('enc');
-    foreach ($tests as $test => $expected) {
-      $this->assertEquals($expected, $m->invoke($o, $test));
-    }
+
+    $this->assertEquals($expected, $m->invoke($o, $test, $isAttribute));
 
     list($o, $s) = $this->getOutputRules(array('encode_entities' => TRUE));
     $m = $this->getProtectedMethod('enc');
+    $this->assertEquals($expectedEncoded, $m->invoke($o, $test, $isAttribute));
+  }
 
-    $this->assertEquals('&period;&plus;&num;', $m->invoke($o, '.+#'));
+  /**
+   * Test basic encoding of text.
+   * @dataProvider getEncData
+   */
+  function testEscape($isAttribute, $test, $expected, $expectedEncoded) {
+
+    list($o, $s) = $this->getOutputRules();
+    $m = $this->getProtectedMethod('escape');
+
+    $this->assertEquals($expected, $m->invoke($o, $test, $isAttribute));
   }
 
   function testAttrs() {
-    $dom = \HTML5::loadHTML('<!doctype html>
+    $dom = $this->html5->loadHTML('<!doctype html>
     <html lang="en">
       <body>
         <div id="foo" class="bar baz" disabled>foo bar baz</div>
@@ -221,21 +287,20 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     </html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $list = $dom->getElementsByTagName('div');
 
     $m = $this->getProtectedMethod('attrs');
-    $m->invoke($o, $list->item(0));
+    $m->invoke($r, $list->item(0));
 
     $content = stream_get_contents($stream, -1, 0);
     $this->assertEquals(' id="foo" class="bar baz" disabled', $content);
   }
 
   function testSvg() {
-    $dom = \HTML5::loadHTML('<!doctype html>
+    $dom = $this->html5->loadHTML('<!doctype html>
     <html lang="en">
       <body>
         <div id="foo" class="bar baz">foo bar baz</div>
@@ -251,12 +316,11 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     </html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $list = $dom->getElementsByTagName('svg');
-    $o->element($list->item(0));
+    $r->element($list->item(0));
     $contents = stream_get_contents($stream, -1, 0);
     $this->assertRegExp('|<svg width="150" height="100" viewBox="0 0 3 2">|', $contents);
     $this->assertRegExp('|<rect width="1" height="2" x="0" fill="#008d46" />|', $contents);
@@ -264,7 +328,7 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
   }
 
   function testMath() {
-    $dom = \HTML5::loadHTML('<!doctype html>
+    $dom = $this->html5->loadHTML('<!doctype html>
     <html lang="en">
       <body>
         <div id="foo" class="bar baz">foo bar baz</div>
@@ -279,15 +343,25 @@ class OutputRulesTest extends \HTML5\Tests\TestCase {
     </html>');
 
     $stream = fopen('php://temp', 'w');
-    $t = new Traverser($dom, $stream, \HTML5::options());
-    $p = $this->getTraverserProtectedProperty('rules');
-    $o = $p->getValue($t);
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
 
     $list = $dom->getElementsByTagName('math');
-    $o->element($list->item(0));
+    $r->element($list->item(0));
     $content = stream_get_contents($stream, -1, 0);
     $this->assertRegExp('|<math>|', $content);
     $this->assertRegExp('|<csymbol definitionURL="http://www.example.com/mathops/multiops.html#plusminus">|', $content);
   }
 
+  function testProcessorInstruction() {
+    $dom = $this->html5->loadHTMLFragment('<?foo bar ?>');
+
+    $stream = fopen('php://temp', 'w');
+    $r = new OutputRules($stream, $this->html5->getOptions());
+    $t = new Traverser($dom, $stream, $r, $this->html5->getOptions());
+
+    $r->processorInstruction($dom->firstChild);
+    $content = stream_get_contents($stream, -1, 0);
+    $this->assertRegExp('|<\?foo bar \?>|', $content);
+  }
 }

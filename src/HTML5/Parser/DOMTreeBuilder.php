@@ -5,19 +5,37 @@ use HTML5\Elements;
 /**
  * Create an HTML5 DOM tree from events.
  *
- * This attempts to create a DOM from events emitted by a parser. This 
- * attempts (but does not guarantee) to up-convert older HTML documents 
- * to HTML5. It does this by applying HTML5's rules, but it will not 
+ * This attempts to create a DOM from events emitted by a parser. This
+ * attempts (but does not guarantee) to up-convert older HTML documents
+ * to HTML5. It does this by applying HTML5's rules, but it will not
  * change the architecture of the document itself.
  *
  * Many of the error correction and quirks features suggested in the specification
  * are implemented herein; however, not all of them are. Since we do not
  * assume a graphical user agent, no presentation-specific logic is conducted
  * during tree building.
+ *
+ * FIXME: The present tree builder does not exactly follow the state machine rules
+ * for insert modes as outlined in the HTML5 spec. The processor needs to be
+ * re-written to accomodate this. See, for example, the Go language HTML5
+ * parser.
  */
 class DOMTreeBuilder implements EventHandler {
 
+  const NAMESPACE_HTML = 'http://www.w3.org/1999/xhtml';
+  const NAMESPACE_MATHML = 'http://www.w3.org/1998/Math/MathML';
+  const NAMESPACE_SVG = 'http://www.w3.org/2000/svg';
 
+  const NAMESPACE_XLINK = 'http://www.w3.org/1999/xlink';
+  const NAMESPACE_XML = 'http://www.w3.org/XML/1998/namespace';
+  const NAMESPACE_XMLNS = 'http://www.w3.org/2000/xmlns/';
+
+  protected $nsRoots = array(
+      'html'=>self::NAMESPACE_HTML,
+      'svg'=>self::NAMESPACE_SVG,
+      'math'=>self::NAMESPACE_MATHML,
+  );
+  protected $nsStack = array();
   /**
    * Defined in 8.2.5.
    */
@@ -50,23 +68,22 @@ class DOMTreeBuilder implements EventHandler {
   protected $stack = array();
   protected $current; // Pointer in the tag hierarchy.
   protected $doc;
+  protected $frag;
 
   protected $processor;
 
   protected $insertMode = 0;
 
   /**
-   * Quirks mode is enabled by default. Any document that is missing the 
+   * Quirks mode is enabled by default. Any document that is missing the
    * DT will be considered to be in quirks mode.
    */
   protected $quirks = TRUE;
 
-  public $isFragment = FALSE;
-
   public function __construct($isFragment = FALSE) {
     $impl = new \DOMImplementation();
     // XXX:
-    // Create the doctype. For now, we are always creating HTML5 
+    // Create the doctype. For now, we are always creating HTML5
     // documents, and attempting to up-convert any older DTDs to HTML5.
     $dt = $impl->createDocumentType('html');
     //$this->doc = \DOMImplementation::createDocument(NULL, 'html', $dt);
@@ -79,12 +96,12 @@ class DOMTreeBuilder implements EventHandler {
     // Create a rules engine for tags.
     $this->rules = new TreeBuildingRules($this->doc);
 
+    array_unshift($this->nsStack, self::NAMESPACE_HTML);
+
     if ($isFragment) {
-      $this->isFragment = TRUE;
-      $this->insertMode = self::IM_IN_BODY;
-      $ele = $this->doc->createElement('html');
-      $this->doc->appendChild($ele);
-      $this->current = $ele;
+      $this->insertMode = static::IM_IN_BODY;
+      $this->frag = $this->doc->createDocumentFragment();
+      $this->current = $this->frag;
     }
   }
 
@@ -98,7 +115,7 @@ class DOMTreeBuilder implements EventHandler {
   /**
    * Get the DOM fragment for the body.
    *
-   * This returns a DOMNodeList because a fragment may have zero or more 
+   * This returns a DOMNodeList because a fragment may have zero or more
    * DOMNodes at its root.
    *
    * @see http://www.w3.org/TR/2012/CR-html5-20121217/syntax.html#concept-frag-parse-context
@@ -106,23 +123,8 @@ class DOMTreeBuilder implements EventHandler {
    * @return \DOMFragmentDocumentFragment
    */
   public function fragment() {
-    $append = $this->doc->documentElement->childNodes;
-    $frag = $this->doc->createDocumentFragment();
-
-    // appendChild() modifies the DOMNodeList, so we
-    // have to buffer up the items first, then use the
-    // array buffer and loop twice.
-    $buffer = array();
-    foreach ($append as $node) {
-      $buffer[] = $node;
-    }
-
-    foreach ($buffer as $node) {
-      $frag->appendChild($node);
-    }
-
-    $frag->errors = $this->doc->errors;
-    return $frag;
+    $this->frag->errors = $this->doc->errors;
+    return $this->frag;
   }
 
   /**
@@ -136,16 +138,16 @@ class DOMTreeBuilder implements EventHandler {
   }
 
   public function doctype($name, $idType = 0, $id = NULL, $quirks = FALSE) {
-    // This is used solely for setting quirks mode. Currently we don't 
+    // This is used solely for setting quirks mode. Currently we don't
     // try to preserve the inbound DT. We convert it to HTML5.
     $this->quirks = $quirks;
 
-    if ($this->insertMode > self::IM_INITIAL) {
+    if ($this->insertMode > static::IM_INITIAL) {
       $this->parseError("Illegal placement of DOCTYPE tag. Ignoring: " . $name);
       return;
     }
 
-    $this->insertMode = self::IM_BEFORE_HTML;
+    $this->insertMode = static::IM_BEFORE_HTML;
   }
 
   /**
@@ -161,12 +163,12 @@ class DOMTreeBuilder implements EventHandler {
     $lname = $this->normalizeTagName($name);
 
     // Make sure we have an html element.
-    if (!$this->doc->documentElement && $name !== 'html') {
+    if (!$this->doc->documentElement && $name !== 'html' && !$this->frag) {
       $this->startTag('html');
     }
 
     // Set quirks mode if we're at IM_INITIAL with no doctype.
-    if ($this->insertMode == self::IM_INITIAL) {
+    if ($this->insertMode == static::IM_INITIAL) {
       $this->quirks = TRUE;
       $this->parseError("No DOCTYPE specified.");
     }
@@ -179,57 +181,78 @@ class DOMTreeBuilder implements EventHandler {
 
 
     // Autoclose p tags where appropriate.
-    if ($this->insertMode >= self::IM_IN_BODY && Elements::isA($name, Elements::AUTOCLOSE_P)) {
+    if ($this->insertMode >= static::IM_IN_BODY && Elements::isA($name, Elements::AUTOCLOSE_P)) {
       $this->autoclose('p');
     }
 
     // Set insert mode:
     switch ($name) {
     case 'html':
-      $this->insertMode = self::IM_BEFORE_HEAD;
+      $this->insertMode = static::IM_BEFORE_HEAD;
       break;
     case 'head':
-      if ($this->insertMode > self::IM_BEFORE_HEAD) {
+      if ($this->insertMode > static::IM_BEFORE_HEAD) {
         $this->parseError("Unexpected head tag outside of head context.");
       }
       else {
-        $this->insertMode = self::IM_IN_HEAD;
+        $this->insertMode = static::IM_IN_HEAD;
       }
       break;
     case 'body':
-      $this->insertMode = self::IM_IN_BODY;
+      $this->insertMode = static::IM_IN_BODY;
       break;
     case 'svg':
-      $this->insertMode = self::IM_IN_SVG;
+      $this->insertMode = static::IM_IN_SVG;
       break;
     case 'math':
-      $this->insertMode = self::IM_IN_MATHML;
+      $this->insertMode = static::IM_IN_MATHML;
       break;
     case 'noscript':
-      if ($this->insertMode == self::IM_IN_HEAD) {
-        $this->insertMode = self::IM_IN_HEAD_NOSCRIPT;
+      if ($this->insertMode == static::IM_IN_HEAD) {
+        $this->insertMode = static::IM_IN_HEAD_NOSCRIPT;
       }
       break;
 
     }
 
     // Special case handling for SVG.
-    if ($this->insertMode == self::IM_IN_SVG) {
+    if ($this->insertMode == static::IM_IN_SVG) {
       $lname = Elements::normalizeSvgElement($lname);
     }
 
+    if (isset($this->nsRoots[$lname]) && $this->nsStack[0]!==$this->nsRoots[$lname]) {
+        array_unshift($this->nsStack, $this->nsRoots[$lname]);
+    }
+    try {
+      if (Elements::isElement($lname)) {
+        $ele = $this->doc->createElementNS($this->nsStack[0], $lname);
+      }
+      else {
+        $ele = $this->doc->createElement($lname);
+      }
 
-    $ele = $this->doc->createElement($lname);
+    }
+    catch(\DOMException $e) {
+      $this->parseError("Illegal tag name: <$lname>. Replaced with <invalid>.");
+      $ele = $this->doc->createElement('invalid');
+    }
+
     foreach ($attributes as $aName => $aVal) {
 
-      if ($this->insertMode == self::IM_IN_SVG) {
+      if ($this->insertMode == static::IM_IN_SVG) {
         $aName = Elements::normalizeSvgAttribute($aName);
       }
-      elseif ($this->insertMode == self::IM_IN_MATHML) {
+      elseif ($this->insertMode == static::IM_IN_MATHML) {
         $aName = Elements::normalizeMathMlAttribute($aName);
       }
 
-      $ele->setAttribute($aName, $aVal);
+      try {
+        $ele->setAttribute($aName, $aVal);
+      }
+      catch(\DOMException $e) {
+        $this->parseError("Illegal attribute name for tag $name. Ignoring: $aName");
+        continue;
+      }
 
       // This is necessary on a non-DTD schema, like HTML5.
       if ($aName == 'id') {
@@ -251,7 +274,13 @@ class DOMTreeBuilder implements EventHandler {
       }
     }
 
-    // Return the element mask, which the tokenizer can then use to set 
+    // This is sort of a last-ditch attempt to correct for cases where no head/body
+    // elements are provided.
+    if ($this->insertMode <= static::IM_BEFORE_HEAD && $name != 'head' && $name != 'html') {
+      $this->insertMode = static::IM_IN_BODY;
+    }
+
+    // Return the element mask, which the tokenizer can then use to set
     // various processing rules.
     return Elements::element($name);
   }
@@ -259,23 +288,32 @@ class DOMTreeBuilder implements EventHandler {
   public function endTag($name) {
     $lname = $this->normalizeTagName($name);
 
+    if (isset($this->nsRoots[$lname]) && $this->nsStack[0]===$this->nsRoots[$lname] && count($this->nsStack[0])>1) {
+        array_shift($this->nsStack);
+    }
+
     // Ignore closing tags for unary elements.
     if (Elements::isA($name, Elements::VOID_TAG)) {
       return;
     }
 
-    if ($this->insertMode <= self::IM_BEFORE_HTML) {
+    if ($this->insertMode <= static::IM_BEFORE_HTML) {
       // 8.2.5.4.2
       if (in_array($name, array('html', 'br', 'head', 'title'))) {
         $this->startTag('html');
         $this->endTag($name);
-        $this->insertMode = self::IM_BEFORE_HEAD;
+        $this->insertMode = static::IM_BEFORE_HEAD;
         return;
       }
 
       // Ignore the tag.
       $this->parseError("Illegal closing tag at global scope.");
       return;
+    }
+
+    // Special case handling for SVG.
+    if ($this->insertMode == static::IM_IN_SVG) {
+      $lname = Elements::normalizeSvgElement($lname);
     }
 
     // XXX: Not sure whether we need this anymore.
@@ -290,27 +328,22 @@ class DOMTreeBuilder implements EventHandler {
     }
 
     //$this->current = $this->current->parentNode;
-    if (!$this->autoclose($name)) {
-      $this->parseError('Could not find closing tag for ' . $name);
+    if (!$this->autoclose($lname)) {
+      $this->parseError('Could not find closing tag for ' . $lname);
     }
 
     //switch ($this->insertMode) {
     switch ($lname) {
     case "head":
-      $this->insertMode = self::IM_AFTER_HEAD;
+      $this->insertMode = static::IM_AFTER_HEAD;
       break;
     case "body":
-      $this->insertMode = self::IM_AFTER_BODY;
+      $this->insertMode = static::IM_AFTER_BODY;
       break;
     case "svg":
     case "mathml":
-      $this->insertMode = self::IM_IN_BODY;
+      $this->insertMode = static::IM_IN_BODY;
       break;
-    }
-
-    // 8.2.5.4.7
-    if ($name == 'sarcasm') {
-      $this->text("Take a deep breath.");
     }
   }
 
@@ -322,13 +355,17 @@ class DOMTreeBuilder implements EventHandler {
 
   public function text($data) {
     // XXX: Hmmm.... should we really be this strict?
-    if ($this->insertMode < self::IM_IN_HEAD) {
-      $data = trim($data);
-      if (!empty($data)) {
+    if ($this->insertMode < static::IM_IN_HEAD) {
+      // Per '8.2.5.4.3 The "before head" insertion mode' the characters
+      // " \t\n\r\f" should be ignored but no mention of a parse error. This is
+      // practical as most documents contain these characters. Other text is not
+      // expected here so recording a parse error is necessary.
+      $dataTmp = trim($data, " \t\n\r\f");
+      if (!empty($dataTmp)) {
         //fprintf(STDOUT, "Unexpected insert mode: %d", $this->insertMode);
-        $this->parseError("Unexpected text. Ignoring: " . $data);
-        return;
+        $this->parseError("Unexpected text. Ignoring: " . $dataTmp);
       }
+      return;
     }
     //fprintf(STDOUT, "Appending text %s.", $data);
     $node = $this->doc->createTextNode($data);
@@ -350,14 +387,14 @@ class DOMTreeBuilder implements EventHandler {
 
   public function processingInstruction($name, $data = NULL) {
     // XXX: Ignore initial XML declaration, per the spec.
-    if ($this->insertMode == self::IM_INITIAL && 'xml' == strtolower($name)) {
+    if ($this->insertMode == static::IM_INITIAL && 'xml' == strtolower($name)) {
       return;
     }
 
-    // Important: The processor may modify the current DOM tree however 
+    // Important: The processor may modify the current DOM tree however
     // it sees fit.
     if (isset($this->processor)) {
-      $res = $processor->process($this->current, $name, $data);
+      $res = $this->processor->process($this->current, $name, $data);
       if (!empty($res)) {
         $this->current = $res;
       }
@@ -387,7 +424,7 @@ class DOMTreeBuilder implements EventHandler {
   protected function normalizeTagName($name) {
     /* Section 2.9 suggests that we should not do this.
     if (strpos($name, ':') !== FALSE) {
-      // We know from the grammar that there must be at least one other 
+      // We know from the grammar that there must be at least one other
       // char besides :, since : is not a legal tag start.
       $parts = explode(':', $name);
       return array_pop($parts);

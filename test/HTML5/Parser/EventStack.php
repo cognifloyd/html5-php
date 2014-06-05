@@ -1,7 +1,8 @@
 <?php
-namespace HTML5\Parser;
+namespace HTML5\Tests\Parser;
 
 use HTML5\Elements;
+use HTML5\Parser\EventHandler;
 
 /**
  * This testing class gathers events from a parser and builds a stack of events.
@@ -86,6 +87,4 @@ class EventStack implements EventHandler {
     $this->store('pi', func_get_args());
   }
 
-}
-class EventStackParseError extends \Exception {
 }

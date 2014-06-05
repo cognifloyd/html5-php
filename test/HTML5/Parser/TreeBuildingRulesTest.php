@@ -3,11 +3,16 @@
  * @file
  * Test the Tree Builder's special-case rules.
  */
-namespace HTML5\Parser;
+namespace HTML5\Tests\Parser;
 
 use HTML5\Elements;
+use HTML5\Parser\TreeBuildingRules;
+use HTML5\Parser\Tokenizer;
+use HTML5\Parser\Scanner;
+use HTML5\Parser\StringInputStream;
+use HTML5\Parser\DOMTreeBuilder;
 
-require_once __DIR__ . '/../TestCase.php';
+
 
 /**
  * These tests are functional, not necessarily unit tests.
@@ -60,6 +65,17 @@ class TreeBuildingRulesTest extends \HTML5\Tests\TestCase {
     $this->assertEquals(2, $list->childNodes->length);
     $this->assertEquals('dt', $list->firstChild->tagName);
     $this->assertEquals('dd', $list->lastChild->tagName);
+  }
+
+  public function testTable() {
+    $html = sprintf(self::HTML_STUB, '<table><thead id="a"><th>foo<td>bar<td>baz');
+    $doc = $this->parse($html);
+
+    $list = $doc->getElementById('a');
+
+    $this->assertEquals(3, $list->childNodes->length);
+    $this->assertEquals('th', $list->firstChild->tagName);
+    $this->assertEquals('td', $list->lastChild->tagName);
   }
 
 }

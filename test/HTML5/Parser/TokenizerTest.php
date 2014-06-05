@@ -1,7 +1,10 @@
 <?php
-namespace HTML5\Parser;
-require_once __DIR__ . '/../TestCase.php';
-require 'EventStack.php';
+namespace HTML5\Tests\Parser;
+
+use HTML5\Parser\UTF8Utils;
+use HTML5\Parser\StringInputStream;
+use HTML5\Parser\Scanner;
+use HTML5\Parser\Tokenizer;
 
 class TokenizerTest extends \HTML5\Tests\TestCase {
   // ================================================================
@@ -109,7 +112,7 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
     $e1 = $events->get(0);
     $this->assertEquals('error', $e1['name']);
 
-    // FIXME: Once the text processor is done, need to verify that the 
+    // FIXME: Once the text processor is done, need to verify that the
     // tokens are transformed correctly into text.
   }
 
@@ -139,12 +142,12 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
     $succeed = array(
       '</a>' => 'a',
       '</test>' => 'test',
-      '</test 
+      '</test
       >' => 'test',
       '</thisIsTheTagThatDoesntEndItJustGoesOnAndOnMyFriend>' =>
-        'thisIsTheTagThatDoesntEndItJustGoesOnAndOnMyFriend',
+        'thisisthetagthatdoesntenditjustgoesonandonmyfriend',
       // See 8.2.4.10, which requires this and does not say error.
-      '</a<b>' => 'a<b', 
+      '</a<b>' => 'a<b',
     );
     $this->isAllGood('endTag', 2, $succeed);
 
@@ -271,8 +274,8 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
   public function testProcessorInstruction() {
     $good = array(
       '<?hph ?>' => 'hph',
-      '<?hph echo "Hello World"; ?>' => array('hph', 'echo "Hello World"; '), 
-      "<?hph \necho 'Hello World';\n?>" => array('hph', "echo 'Hello World';\n"), 
+      '<?hph echo "Hello World"; ?>' => array('hph', 'echo "Hello World"; '),
+      "<?hph \necho 'Hello World';\n?>" => array('hph', "echo 'Hello World';\n"),
     );
     $this->isAllGood('pi', 2, $good);
   }
@@ -320,6 +323,93 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
     }
   }
 
+  public function testTagsWithAttributeAndMissingName() {
+    $cases = array(
+      '<id="top_featured">' => 'id',
+      '<color="white">' => 'color',
+      "<class='neaktivni_stranka'>" => 'class',
+      '<bgcolor="white">' => 'bgcolor',
+      '<class="nom">' => 'class',
+    );
+
+    foreach($cases as $html => $expected) {
+      $events = $this->parse($html);
+      $this->assertEventError($events->get(0));
+      $this->assertEventError($events->get(1));
+      $this->assertEventError($events->get(2));
+      $this->assertEventEquals('startTag', $expected, $events->get(3));
+      $this->assertEventEquals('eof', NULL, $events->get(4));
+    }
+  }
+
+  public function testTagNotClosedAfterTagName() {
+    $cases = array(
+      "<noscript<img>" => array('noscript', 'img'),
+      '<center<a>' => array('center', 'a'),
+      '<br<br>' => array('br', 'br'),
+    );
+
+    foreach($cases as $html => $expected) {
+      $events = $this->parse($html);
+      $this->assertEventError($events->get(0));
+      $this->assertEventEquals('startTag', $expected[0], $events->get(1));
+      $this->assertEventEquals('startTag', $expected[1], $events->get(2));
+      $this->assertEventEquals('eof', NULL, $events->get(3));
+    }
+
+    $events = $this->parse('<span<>02</span>');
+    $this->assertEventError($events->get(0));
+    $this->assertEventEquals('startTag', 'span', $events->get(1));
+    $this->assertEventError($events->get(2));
+    $this->assertEventEquals('text', '>02', $events->get(3));
+    $this->assertEventEquals('endTag', 'span', $events->get(4));
+    $this->assertEventEquals('eof', NULL, $events->get(5));
+
+    $events = $this->parse('<p</p>');
+    $this->assertEventError($events->get(0));
+    $this->assertEventEquals('startTag', 'p', $events->get(1));
+    $this->assertEventEquals('endTag', 'p', $events->get(2));
+    $this->assertEventEquals('eof', NULL, $events->get(3));
+
+    $events = $this->parse('<strong><WordPress</strong>');
+    $this->assertEventEquals('startTag', 'strong', $events->get(0));
+    $this->assertEventError($events->get(1));
+    $this->assertEventEquals('startTag', 'wordpress', $events->get(2));
+    $this->assertEventEquals('endTag', 'strong', $events->get(3));
+    $this->assertEventEquals('eof', NULL, $events->get(4));
+
+    $events = $this->parse('<src=<a>');
+    $this->assertEventError($events->get(0));
+    $this->assertEventError($events->get(1));
+    $this->assertEventError($events->get(2));
+    $this->assertEventEquals('startTag', 'src', $events->get(3));
+    $this->assertEventEquals('startTag', 'a', $events->get(4));
+    $this->assertEventEquals('eof', NULL, $events->get(5));
+
+    $events = $this->parse('<br...<a>');
+    $this->assertEventError($events->get(0));
+    $this->assertEventEquals('startTag', 'br', $events->get(1));
+    $this->assertEventEquals('eof', NULL, $events->get(2));
+  }
+
+  public function testIllegalTagNames() {
+    $cases = array(
+      '<li">' => 'li',
+      '<p">' => 'p',
+      '<b&nbsp; >' => 'b',
+      '<static*all>' => 'static',
+      '<h*0720/>' => 'h',
+      '<st*ATTRIBUTE />' => 'st',
+      '<a-href="http://url.com/">' => 'a',
+    );
+
+    foreach($cases as $html => $expected) {
+      $events = $this->parse($html);
+      $this->assertEventError($events->get(0));
+      $this->assertEventEquals('startTag', $expected, $events->get(1));
+    }
+  }
+
   /**
    * @depends testCharacterReference
    */
@@ -328,6 +418,7 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
     $good = array(
       '<foo bar="baz">' => array('foo', array('bar' => 'baz'), FALSE),
       '<foo bar=" baz ">' => array('foo', array('bar' => ' baz '), FALSE),
+      "<foo bar=\"\nbaz\n\">" => array('foo', array('bar' => "\nbaz\n"), FALSE),
       "<foo bar='baz'>" => array('foo', array('bar' => 'baz'), FALSE),
       '<foo bar="A full sentence.">' => array('foo', array('bar' => 'A full sentence.'), FALSE),
       "<foo a='1' b=\"2\">" => array('foo', array('a' => '1', 'b' => '2'), FALSE),
@@ -362,10 +453,17 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
       // This will emit an entity lookup failure for &red.
       "<foo a='blue&red'>" => array('foo', array('a' => 'blue&red'), FALSE),
       "<foo a='blue&&amp;&red'>" => array('foo', array('a' => 'blue&&&red'), FALSE),
-      '<foo b"="baz">' => array('foo', array('b"' => 'baz'), FALSE),
       '<foo bar=>' => array('foo', array('bar' => NULL), FALSE),
       '<foo bar="oh' => array('foo', array('bar' => 'oh'), FALSE),
       '<foo bar=oh">' => array('foo', array('bar' => 'oh"'), FALSE),
+
+      // these attributes are ignored because of current implementation
+      // of method "DOMElement::setAttribute"
+      // see issue #23: https://github.com/Masterminds/html5-php/issues/23
+      '<foo b"="baz">' => array('foo', array(), FALSE),
+      '<foo 2abc="baz">' => array('foo', array(), FALSE),
+      '<foo ?="baz">' => array('foo', array(), FALSE),
+      '<foo foo?bar="baz">' => array('foo', array(), FALSE),
 
     );
     foreach ($bad as $test => $expects) {
@@ -379,6 +477,8 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
     $reallyBad = array(
       '<foo ="bar">' => array('foo', array('=' => NULL, '"bar"' => NULL), FALSE),
       '<foo////>' => array('foo', array(), TRUE),
+      // character "&" in unquoted attribute shouldn't cause an infinite loop
+      '<foo bar=index.php?str=1&amp;id=29>' => array('foo', array('bar' => 'index.php?str=1&id=29'), FALSE),
     );
     foreach ($reallyBad as $test => $expects) {
       $events = $this->parse($test);
@@ -387,6 +487,14 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
       $this->assertEventError($events->get(1));
       //$this->assertEventEquals('startTag', $expects, $events->get(1));
     }
+
+    // Regression: Malformed elements should be detected.
+    //  '<foo baz="1" <bar></foo>' => array('foo', array('baz' => '1'), FALSE),
+    $events = $this->parse('<foo baz="1" <bar></foo>');
+    $this->assertEventError($events->get(0));
+    $this->assertEventEquals('startTag', array('foo', array('baz' => '1'), FALSE), $events->get(1));
+    $this->assertEventEquals('startTag', array('bar', array(), FALSE), $events->get(2));
+    $this->assertEventEquals('endTag', array('foo'), $events->get(3));
   }
 
   public function testRawText() {
@@ -418,6 +526,12 @@ class TokenizerTest extends \HTML5\Tests\TestCase {
       $this->assertEventError($events->get(1));
       $this->assertEventEquals('text', $expects, $events->get(2));
     }
+
+    // Testing case sensitivity
+    $events = $this->parse('<TITLE>a test</TITLE>');
+    $this->assertEventEquals('startTag', 'title', $events->get(0));
+    $this->assertEventEquals('text', 'a test', $events->get(1));
+    $this->assertEventEquals('endTag', 'title', $events->get(2));
 
   }
 

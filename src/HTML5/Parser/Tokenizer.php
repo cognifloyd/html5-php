@@ -295,7 +295,7 @@ class Tokenizer {
       return $this->bogusComment('</');
     }
 
-    $name = $this->scanner->charsUntil("\n\f \t>");
+    $name = strtolower($this->scanner->charsUntil("\n\f \t>"));
     // Trash whitespace.
     $this->scanner->whitespace();
 
@@ -322,15 +322,24 @@ class Tokenizer {
     }
 
     // We know this is at least one char.
-    $name = strtolower($this->scanner->charsUntil("/> \n\f\t"));
+    $name = strtolower($this->scanner->charsWhile(
+      ":0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    ));
     $attributes = array();
     $selfClose = FALSE;
 
-    do {
-      $this->scanner->whitespace();
-      $this->attribute($attributes);
+    // Handle attribute parse exceptions here so that we can
+    // react by trying to build a sensible parse tree.
+    try {
+      do {
+        $this->scanner->whitespace();
+        $this->attribute($attributes);
+      }
+      while (!$this->isTagEnd($selfClose));
+      }
+    catch (ParseError $e) {
+      $selfClose = FALSE;
     }
-    while (!$this->isTagEnd($selfClose));
 
     $mode = $this->events->startTag($name, $attributes, $selfClose);
     // Should we do this? What does this buy that selfClose doesn't?
@@ -390,6 +399,14 @@ class Tokenizer {
       return FALSE;
     }
 
+    if ($tok == '<') {
+      $this->parseError("Unexepcted '<' inside of attributes list.");
+      // Push the < back onto the stack.
+      $this->scanner->unconsume();
+      // Let the caller figure out how to handle this.
+      throw new ParseError("Start tag inside of attribute.");
+    }
+
     $name = strtolower($this->scanner->charsUntil("/>=\n\f\t "));
 
     if (strlen($name) == 0) {
@@ -399,16 +416,33 @@ class Tokenizer {
       $name = $this->scanner->current();
       $this->scanner->next();
     }
-    if (preg_match('/[\'\"]/', $name)) {
-    //if (strspn($name, '\'\"')) {
+
+    $isValidAttribute = TRUE;
+    // Attribute names can contain most Unicode characters for HTML5.
+    // But method "DOMElement::setAttribute" is throwing exception
+    // because of it's own internal restriction so these have to be filtered.
+    // see issue #23: https://github.com/Masterminds/html5-php/issues/23
+    // and http://www.w3.org/TR/2011/WD-html5-20110525/syntax.html#syntax-attribute-name
+    if (preg_match("/[\x1-\x2C\\/\x3B-\x40\x5B-\x5E\x60\x7B-\x7F]/u", $name)) {
       $this->parseError("Unexpected characters in attribute name: %s", $name);
+      $isValidAttribute = FALSE;
+    }
+    // There is no limitation for 1st character in HTML5.
+    // But method "DOMElement::setAttribute" is throwing exception for the
+    // characters below so they have to be filtered.
+    // see issue #23: https://github.com/Masterminds/html5-php/issues/23
+    // and http://www.w3.org/TR/2011/WD-html5-20110525/syntax.html#syntax-attribute-name
+    else if (preg_match("/^[0-9.-]/u", $name)) {
+      $this->parseError("Unexpected character at the begining of attribute name: %s", $name);
+      $isValidAttribute = FALSE;
     }
     // 8.1.2.3
     $this->scanner->whitespace();
 
     $val = $this->attributeValue();
-    //return array($name, $val);
-    $attributes[$name] = $val;
+    if($isValidAttribute) {
+      $attributes[$name] = $val;
+    }
     return TRUE;
   }
 
@@ -460,7 +494,7 @@ class Tokenizer {
    *   The attribute value.
    */
   protected function quotedAttributeValue($quote) {
-    $stoplist = "\t\n\f" . $quote;
+    $stoplist = "\f" . $quote;
     $val = '';
     $tok = $this->scanner->current();
     while (strspn($tok, $stoplist) == 0 && $tok !== FALSE) {
@@ -483,6 +517,7 @@ class Tokenizer {
     while (strspn($tok, $stoplist) == 0 && $tok !== FALSE) {
       if ($tok == '&') {
         $val .= $this->decodeCharacterReference(TRUE);
+        $tok = $this->scanner->current();
       }
       else {
         if(strspn($tok, "\"'<=`") > 0) {
@@ -714,7 +749,7 @@ class Tokenizer {
    */
   protected function quotedString($stopchars) {
     $tok = $this->scanner->current();
-    if ($tok == '"' || "'") {
+    if ($tok == '"' || $tok == "'") {
       $this->scanner->next();
       $ret = $this->scanner->charsUntil($tok . $stopchars);
       if ($this->scanner->current() == $tok) {
@@ -774,7 +809,7 @@ class Tokenizer {
    *
    * XML processing instructions are supposed to be ignored in HTML5,
    * treated as "bogus comments". However, since we're not a user
-   * agent, we allow them. We consume until ?> and then issue a 
+   * agent, we allow them. We consume until ?> and then issue a
    * EventListener::processingInstruction() event.
    */
   protected function processingInstruction() {
@@ -794,7 +829,8 @@ class Tokenizer {
     }
 
     $data = '';
-    while ($this->scanner->current() != '?' && $this->scanner->peek() != '>') {
+    // As long as it's not the case that the next two chars are ? and >.
+    while (!($this->scanner->current() == '?' && $this->scanner->peek() == '>')) {
       $data .= $this->scanner->current();
 
       $tok = $this->scanner->next();
@@ -818,7 +854,7 @@ class Tokenizer {
   // ================================================================
 
   /**
-   * Read from the input stream until we get to the desired sequene 
+   * Read from the input stream until we get to the desired sequene
    * or hit the end of the input stream.
    */
   protected function readUntilSequence($sequence) {
@@ -830,7 +866,7 @@ class Tokenizer {
       $buffer .= $this->scanner->charsUntil($first);
 
       // Stop as soon as we hit the stopping condition.
-      if ($this->sequenceMatches($sequence)) {
+      if ($this->sequenceMatches($sequence) || $this->sequenceMatches(strtoupper($sequence))) {
         return $buffer;
       }
       $buffer .= $this->scanner->current();
@@ -848,11 +884,11 @@ class Tokenizer {
    * This will read the stream for the $sequence. If it's
    * found, this will return TRUE. If not, return FALSE.
    * Since this unconsumes any chars it reads, the caller
-   * will still need to read the next sequence, even if 
+   * will still need to read the next sequence, even if
    * this returns TRUE.
    *
    * Example: $this->sequenceMatches('</script>') will
-   * see if the input stream is at the start of a 
+   * see if the input stream is at the start of a
    * '</script>' string.
    */
   protected function sequenceMatches($sequence) {
@@ -901,7 +937,7 @@ class Tokenizer {
   /**
    * Emit a parse error.
    *
-   * A parse error always returns FALSE because it never consumes any 
+   * A parse error always returns FALSE because it never consumes any
    * characters.
    */
   protected function parseError($msg) {
@@ -946,7 +982,7 @@ class Tokenizer {
 
     // These indicate not an entity. We return just
     // the &.
-    if (strspn($tok, self::WHITE . "&<") == 1) {
+    if (strspn($tok, static::WHITE . "&<") == 1) {
       //$this->scanner->next();
       return '&';
     }
@@ -1007,7 +1043,7 @@ class Tokenizer {
       return $entity;
     }
 
-    // If in an attribute, then failing to match ; means unconsume the 
+    // If in an attribute, then failing to match ; means unconsume the
     // entire string. Otherwise, failure to match is an error.
     if ($inAttribute) {
       $this->scanner->unconsume($this->scanner->position() - $start);
