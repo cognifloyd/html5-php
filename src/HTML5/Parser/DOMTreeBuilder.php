@@ -36,6 +36,7 @@ class DOMTreeBuilder implements EventHandler {
       'math'=>self::NAMESPACE_MATHML,
   );
   protected $nsStack = array();
+  protected $extraNamespaces = array();
   /**
    * Defined in 8.2.5.
    */
@@ -153,12 +154,27 @@ class DOMTreeBuilder implements EventHandler {
   /**
    * Process the start tag.
    *
+   * JAF: Working on the XMLNS handling
    * @todo
    *   - XMLNS namespace handling (we need to parse, even if it's not valid)
    *   - XLink, MathML and SVG namespace handling
    *   - Omission rules: 8.1.2.4 Optional tags
    */
   public function startTag($name, $attributes = array(), $selfClosing = FALSE) {
+    /*
+     * Processing Namespaces should be done right around wherever normalizeTagName is called
+     * Oddly enough: normalizeTagName does nothing, but it has some commented out code that
+     * explodes around ":", so that would be a good basis. Maybe something that explodes, and
+     * then returns an array with Namespace, and tag name.
+     *
+     * But it should only look for the namespace if it's somehow enabled.
+     * 
+     * It turns out that $lname should include the prefix, so don't mess with it.
+     */
+    if(TRUE) { //TODO: namespace processing flag
+      $ns = $this->getTagNamespaceUri($name);
+    }
+
     // fprintf(STDOUT, $name);
     $lname = $this->normalizeTagName($name);
 
@@ -227,6 +243,9 @@ class DOMTreeBuilder implements EventHandler {
       if (Elements::isElement($lname)) {
         $ele = $this->doc->createElementNS($this->nsStack[0], $lname);
       }
+      elseif (TRUE && $ns !== '') { //TODO: Namespace processing flag
+        $ele = $this->doc->createElementNS($ns, $lname);
+      }
       else {
         $ele = $this->doc->createElement($lname);
       }
@@ -244,6 +263,12 @@ class DOMTreeBuilder implements EventHandler {
       }
       elseif ($this->insertMode == static::IM_IN_MATHML) {
         $aName = Elements::normalizeMathMlAttribute($aName);
+      }
+
+      //register any namespaces if xmlns is allowed.
+      if(TRUE && $name === 'html' && substr($aname, 0, 6) === 'xmlns:') { //TODO: Namespace processing flag
+        $aNamespace = array_pop(explode(':', $aName, 2));
+        $this->registerNamespace($aNamespace,$aValue);
       }
 
       try {
@@ -286,6 +311,12 @@ class DOMTreeBuilder implements EventHandler {
   }
 
   public function endTag($name) {
+    if (TRUE) { //TODO: Namespace processing flag
+      $ns = $this->getTagNamespaceUri($name);
+      if ($ns === '') continue;
+      //do something about the namespace here
+    }
+
     $lname = $this->normalizeTagName($name);
 
     if (isset($this->nsRoots[$lname]) && $this->nsStack[0]===$this->nsRoots[$lname] && count($this->nsStack[0])>1) {
@@ -432,6 +463,41 @@ class DOMTreeBuilder implements EventHandler {
      */
 
     return $name;
+  }
+
+  /**
+   * Extract the namespace from the tag name, lookup the appropriate namespace uri
+   * and return the namespace uri
+   * 
+   * When this returns an empty string '' then no namespace (or no registered namespace) was detected.'
+   * 
+   * @param string $name The tag name
+   */
+  protected function getTagNamespaceUri($name) {
+    if (strpos($name, ':') === FALSE) {
+      return '';
+    } else {
+      $nsPrefix = array_shift(explode(':', $name, 2));
+      return $this->lookupNamespaceUri($nsPrefix);
+    }
+    
+  }
+  protected function lookupNamespaceUri($nsPrefix) {
+    if(!isset($this->nsRoot[$nsPrefix]) && !isset($this->extraNamespace[$nsPrefix])) {
+      $this->parseError("Namespace not registered. Ignoring: " . $nsPrefix);
+      return '';
+    }
+    $namespaceUri = isset($this->nsRoot[$nsPrefix]) ? $this->nsRoot[$nsPrefix] : $this->extraNamespace[$nsPrefix];
+    return $namespaceUri
+  }
+  /**
+   * This needs to be public so that it can be accessible from processors that want to add namespaces.
+   */
+  public function registerNamespace($nsPrefix, $namespaceUri) {
+    if(isset($this->nsRoot[$nsPrefix]) || isset($this->extraNamespace[$nsPrefix])) {
+      $this->parseError("Namespace already registered. Ignoring: " . $nsPrefix);
+    }
+    $this->extraNamespaces[$nsPrefix] = $namespaceUri;
   }
 
   protected function quirksTreeResolver($name) {
